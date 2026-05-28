@@ -715,3 +715,127 @@ app.post('/api/auth/reset-password', async (req, res) => {
     res.status(500).json({ error: 'Serverfehler. Bitte erneut versuchen.' });
   }
 });
+
+// ─── Goals ────────────────────────────────────────────────────────────────────
+// GET /api/goals
+app.get('/api/goals', authenticateToken, async (req, res) => {
+  const email = req.user.email;
+  try {
+    const result = await pool.query('SELECT * FROM user_goals WHERE user_id = $1', [email]);
+    if (result.rows.length === 0) {
+      return res.json({ daily_steps: 10000, sleep_hours: 8.0, daily_calories: 500, resting_hr: 60, email_reminders: false });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('GET goals error:', err);
+    res.status(500).json({ error: 'Serverfehler.' });
+  }
+});
+
+// PUT /api/goals
+app.put('/api/goals', authenticateToken, async (req, res) => {
+  const email = req.user.email;
+  const { daily_steps, sleep_hours, daily_calories, resting_hr, email_reminders } = req.body;
+  try {
+    await pool.query(
+      `INSERT INTO user_goals (user_id, daily_steps, sleep_hours, daily_calories, resting_hr, email_reminders, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,NOW())
+       ON CONFLICT (user_id) DO UPDATE SET
+         daily_steps=$2, sleep_hours=$3, daily_calories=$4, resting_hr=$5, email_reminders=$6, updated_at=NOW()`,
+      [email, daily_steps, sleep_hours, daily_calories, resting_hr, email_reminders]
+    );
+    res.json({ message: 'Ziele gespeichert.' });
+  } catch (err) {
+    console.error('PUT goals error:', err);
+    res.status(500).json({ error: 'Serverfehler.' });
+  }
+});
+
+// ─── Daily Goal Reminder Cron ─────────────────────────────────────────────────
+const cron = require('node-cron');
+
+cron.schedule('0 8 * * *', async () => {
+  console.log('[cron] Sending daily goal reminders...');
+  try {
+    const users = await pool.query(
+      `SELECT u.email, u.first_name, g.daily_steps, g.sleep_hours, g.daily_calories, g.resting_hr
+       FROM users u JOIN user_goals g ON g.user_id = u.email
+       WHERE g.email_reminders = TRUE`
+    );
+    for (const user of users.rows) {
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+      const [stepsRes, sleepRes, calRes, hrRes] = await Promise.all([
+        pool.query(`SELECT COALESCE(ROUND(AVG(step_count)),0) AS avg FROM step_records WHERE user_id=$1 AND date >= $2`, [user.email, sevenDaysAgo]),
+        pool.query(`SELECT COALESCE(ROUND(AVG(duration_minutes)/60.0,1),0) AS avg FROM sleep_sessions WHERE user_id=$1 AND start_time >= $2`, [user.email, sevenDaysAgo]),
+        pool.query(`SELECT COALESCE(ROUND(AVG(calories_burned)),0) AS avg FROM activities WHERE user_id=$1 AND start_time >= $2`, [user.email, sevenDaysAgo]),
+        pool.query(`SELECT COALESCE(ROUND(AVG(bpm)),0) AS avg FROM heart_rate_records WHERE user_id=$1 AND timestamp >= $2`, [user.email, sevenDaysAgo]),
+      ]);
+
+      const avg = {
+        steps:    Number(stepsRes.rows[0].avg),
+        sleep:    Number(sleepRes.rows[0].avg),
+        calories: Number(calRes.rows[0].avg),
+        hr:       Number(hrRes.rows[0].avg),
+      };
+
+      function row(icon, label, goal, actual, unit) {
+        const hit = actual >= goal;
+        const bar = hit
+          ? `<span style="color:#16a34a;font-weight:700;">✔ On track</span>`
+          : `<span style="color:#dc2626;font-weight:700;">✘ ${goal - actual}${unit} to go</span>`;
+        return `
+          <tr>
+            <td style="padding:0.6rem 0.8rem;">${icon} ${label}</td>
+            <td style="padding:0.6rem 0.8rem;font-weight:700;">${goal}${unit}</td>
+            <td style="padding:0.6rem 0.8rem;">${actual}${unit}</td>
+            <td style="padding:0.6rem 0.8rem;">${bar}</td>
+          </tr>`;
+      }
+
+      const allOnTrack = avg.steps >= user.daily_steps && avg.sleep >= user.sleep_hours && avg.calories >= user.daily_calories;
+
+      await mailer.sendMail({
+        from: `"HealthSync" <${process.env.EMAIL_USER}>`,
+        to: user.email,
+        subject: `Hey ${user.first_name}, hier sind deine täglichen Ziele 💙`,
+        html: `
+          <div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:2rem;background:#f8fafc;border-radius:16px;">
+            <div style="text-align:center;margin-bottom:1.5rem;">
+              <div style="background:linear-gradient(135deg,#3b82f6,#2563eb);width:48px;height:48px;border-radius:14px;display:inline-flex;align-items:center;justify-content:center;">
+                <span style="color:#fff;font-size:1.5rem;">💙</span>
+              </div>
+              <h2 style="color:#0f172a;margin-top:0.8rem;">HealthSync</h2>
+            </div>
+            <h3 style="color:#0f172a;">Hey ${user.first_name}! ${allOnTrack ? '🎉 Du erreichst alle deine Ziele!' : 'Deine Ziele für diese Woche:'}</h3>
+            <p style="color:#64748b;line-height:1.6;">Hier ist dein 7-Tage-Durchschnitt verglichen mit deinen Zielen:</p>
+            <table style="width:100%;border-collapse:collapse;background:#fff;border-radius:12px;overflow:hidden;margin:1rem 0;">
+              <thead>
+                <tr style="background:#eff6ff;">
+                  <th style="padding:0.6rem 0.8rem;text-align:left;font-size:0.8rem;color:#64748b;">Ziel</th>
+                  <th style="padding:0.6rem 0.8rem;text-align:left;font-size:0.8rem;color:#64748b;">Zielwert</th>
+                  <th style="padding:0.6rem 0.8rem;text-align:left;font-size:0.8rem;color:#64748b;">Ø 7 Tage</th>
+                  <th style="padding:0.6rem 0.8rem;text-align:left;font-size:0.8rem;color:#64748b;">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${row('👟','Schritte',       user.daily_steps,    avg.steps,    '')}
+                ${row('🌙','Schlaf',          user.sleep_hours,    avg.sleep,    'h')}
+                ${row('🔥','Kalorien',        user.daily_calories, avg.calories, ' kcal')}
+                ${row('❤️','Ruhepuls (max)', user.resting_hr,     avg.hr,       ' BPM')}
+              </tbody>
+            </table>
+            <div style="text-align:center;margin:1.5rem 0;">
+              <a href="${process.env.APP_URL}/dashboard" style="background:linear-gradient(135deg,#3b82f6,#2563eb);color:#fff;text-decoration:none;padding:0.85rem 2rem;border-radius:10px;font-weight:700;font-size:0.97rem;">Dashboard öffnen</a>
+            </div>
+            <hr style="border:none;border-top:1px solid #e2e8f0;margin:1.5rem 0;">
+            <p style="color:#cbd5e1;font-size:0.75rem;text-align:center;">Du erhältst diese E-Mail weil du Erinnerungen in HealthSync aktiviert hast. <a href="${process.env.APP_URL}/settings" style="color:#94a3b8;">Einstellungen ändern</a></p>
+          </div>
+        `,
+      });
+      console.log(`[cron] Reminder sent to ${user.email}`);
+    }
+  } catch (err) {
+    console.error('[cron] Reminder error:', err);
+  }
+});

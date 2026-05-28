@@ -41,42 +41,15 @@
           </div>
         </div>
         <div class="goals-grid">
-          <div class="goal-card">
+          <div v-for="goal in healthGoals" :key="goal.label" class="goal-card">
             <div class="goal-header">
-              <div class="goal-icon steps">👟</div>
-              <span class="goal-label">Daily Steps</span>
+              <div :class="['goal-icon', goal.variant]">{{ goal.icon }}</div>
+              <span class="goal-label">{{ goal.label }}</span>
             </div>
-            <input type="number" v-model.number="goals.daily_steps" min="1000" max="50000" />
-            <div class="goal-rec">Empfehlung: 10.000 Schritte</div>
-          </div>
-          <div class="goal-card">
-            <div class="goal-header">
-              <div class="goal-icon sleep">🌙</div>
-              <span class="goal-label">Sleep Hours</span>
-            </div>
-            <input type="number" v-model.number="goals.sleep_hours" min="4" max="12" step="0.5" />
-            <div class="goal-rec">Empfehlung: 7–9 Stunden</div>
-          </div>
-          <div class="goal-card">
-            <div class="goal-header">
-              <div class="goal-icon cal">🔥</div>
-              <span class="goal-label">Calories to Burn</span>
-            </div>
-            <input type="number" v-model.number="goals.daily_calories" min="100" max="3000" />
-            <div class="goal-rec">Aktive Kalorien pro Tag</div>
-          </div>
-          <div class="goal-card">
-            <div class="goal-header">
-              <div class="goal-icon heart">❤️</div>
-              <span class="goal-label">Target Resting HR</span>
-            </div>
-            <input type="number" v-model.number="goals.resting_hr" min="40" max="120" />
-            <div class="goal-rec">Gesund: 60–100 BPM</div>
+            <input type="text" :value="goal.value" readonly />
+            <div class="goal-rec">{{ goal.rec }}</div>
           </div>
         </div>
-        <button class="btn-save-goals" @click="saveGoals" :disabled="goalsLoading">
-          {{ goalsLoading ? 'Wird gespeichert...' : 'Ziele speichern' }}
-        </button>
       </div>
 
       <!-- Notifications -->
@@ -89,15 +62,6 @@
           </div>
         </div>
         <div class="toggle-list">
-          <div class="toggle-row">
-            <div>
-              <div class="toggle-name">Tägliche Erinnerungen</div>
-              <div class="toggle-desc">Erhalte täglich um 8:00 Uhr eine E-Mail mit deinem Fortschritt</div>
-            </div>
-            <div :class="['toggle-switch', { on: goals.email_reminders }]" @click="toggleReminder">
-              <div class="toggle-knob"></div>
-            </div>
-          </div>
           <div v-for="n in notifications" :key="n.name" class="toggle-row">
             <div>
               <div class="toggle-name">{{ n.name }}</div>
@@ -212,7 +176,7 @@
 </template>
 
 <script setup>
-import { ref, computed, reactive, onMounted } from 'vue'
+import { ref, computed, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import Sidebar from '../components/Sidebar.vue'
 
@@ -243,58 +207,6 @@ function showFlash(msg, type = 'success') {
   flashType.value = type
   setTimeout(() => { flashMsg.value = '' }, 4000)
 }
-
-// Goals
-const goalsLoading = ref(false)
-const goals = reactive({
-  daily_steps: 10000,
-  sleep_hours: 8.0,
-  daily_calories: 500,
-  resting_hr: 60,
-  email_reminders: false,
-})
-
-async function loadGoals() {
-  try {
-    const token = localStorage.getItem('hs_token')
-    const res = await fetch('/api/goals', { headers: { Authorization: `Bearer ${token}` } })
-    if (res.ok) {
-      const data = await res.json()
-      goals.daily_steps = data.daily_steps
-      goals.sleep_hours = Number(data.sleep_hours)
-      goals.daily_calories = data.daily_calories
-      goals.resting_hr = data.resting_hr
-      goals.email_reminders = data.email_reminders
-    }
-  } catch {}
-}
-
-async function saveGoals() {
-  goalsLoading.value = true
-  try {
-    const token = localStorage.getItem('hs_token')
-    const res = await fetch('/api/goals', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify(goals),
-    })
-    if (res.ok) {
-      showFlash('Ziele erfolgreich gespeichert.', 'success')
-    } else {
-      showFlash('Fehler beim Speichern.', 'error')
-    }
-  } catch {
-    showFlash('Netzwerkfehler.', 'error')
-  }
-  goalsLoading.value = false
-}
-
-async function toggleReminder() {
-  goals.email_reminders = !goals.email_reminders
-  await saveGoals()
-}
-
-onMounted(loadGoals)
 
 // Change password
 const showPasswordModal = ref(false)
@@ -380,6 +292,7 @@ async function deleteAccount() {
   deleteLoading.value = true
   try {
     const token = localStorage.getItem('hs_token')
+    // First verify password via login
     const email = JSON.parse(localStorage.getItem('hs_user') || '{}').email
     const verifyRes = await fetch('/api/login', {
       method: 'POST',
@@ -409,8 +322,17 @@ async function deleteAccount() {
   deleteLoading.value = false
 }
 
+const healthGoals = [
+  { label: 'Daily Steps',      icon: '👟', value: '10.000', rec: 'Empfehlung: 10.000 Schritte', variant: 'steps' },
+  { label: 'Sleep Hours',      icon: '🌙', value: '8h',     rec: 'Empfehlung: 7–9 Stunden',    variant: 'sleep' },
+  { label: 'Calories to Burn', icon: '🔥', value: '500',   rec: 'Aktive Kalorien pro Tag',     variant: 'cal' },
+  { label: 'Target Resting HR',icon: '❤️', value: '60',    rec: 'Gesund: 60–100 BPM',          variant: 'heart' },
+]
+
 const notifications = reactive([
+  { name: 'Tägliche Erinnerungen',  desc: 'Werde erinnert, deine Aktivitäten zu loggen', on: true },
   { name: 'Achievement-Benachrichtigungen', desc: 'Benachrichtigungen wenn du Achievements freischaltest', on: true },
+  { name: 'Wöchentliche Berichte',  desc: 'Erhalte wöchentliche Gesundheitszusammenfassungen', on: true },
   { name: 'Schlaf-Erinnerungen',    desc: 'Schlafzeit-Erinnerungen für besseren Schlaf', on: true },
   { name: 'Aktivitäts-Erinnerungen',desc: 'Erinnerungen, den ganzen Tag aktiv zu bleiben', on: false },
 ])
@@ -447,7 +369,7 @@ function handleLogout() {
 .form-group input { padding: 0.7rem 0.9rem; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 0.9rem; font-weight: 500; color: #0f172a; background: #f8fafc; font-family: inherit; box-sizing: border-box; }
 .form-group input:focus { outline: none; border-color: #3b82f6; background: #fff; }
 
-.goals-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+.goals-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
 .goal-card { padding: 1rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; }
 .goal-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
 .goal-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 0.9rem; }
@@ -456,13 +378,8 @@ function handleLogout() {
 .goal-icon.cal   { background: #fff7ed; }
 .goal-icon.heart { background: #fef2f2; }
 .goal-label { font-size: 0.88rem; font-weight: 700; color: #0f172a; }
-.goal-card input { width: 100%; padding: 0.6rem 0.8rem; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 0.9rem; font-weight: 600; color: #0f172a; background: #fff; font-family: inherit; box-sizing: border-box; margin-bottom: 0.3rem; transition: border-color 0.2s; }
-.goal-card input:focus { outline: none; border-color: #3b82f6; }
+.goal-card input { width: 100%; padding: 0.6rem 0.8rem; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 0.9rem; font-weight: 600; color: #0f172a; background: #fff; font-family: inherit; box-sizing: border-box; margin-bottom: 0.3rem; }
 .goal-rec { font-size: 0.7rem; color: #94a3b8; font-weight: 500; }
-
-.btn-save-goals { width: 100%; padding: 0.75rem; border: none; border-radius: 12px; background: linear-gradient(135deg,#3b82f6,#2563eb); color: #fff; font-size: 0.9rem; font-weight: 700; cursor: pointer; font-family: inherit; transition: opacity 0.2s; }
-.btn-save-goals:hover:not(:disabled) { opacity: 0.9; }
-.btn-save-goals:disabled { opacity: 0.6; cursor: not-allowed; }
 
 .toggle-list { display: flex; flex-direction: column; gap: 0.6rem; }
 .toggle-row { display: flex; justify-content: space-between; align-items: center; padding: 0.9rem 1rem; background: #f8fafc; border: 1px solid #f1f5f9; border-radius: 14px; }

@@ -839,3 +839,62 @@ cron.schedule('0 8 * * *', async () => {
     console.error('[cron] Reminder error:', err);
   }
 });
+
+// ─── CSV Export (ZIP) ─────────────────────────────────────────────────────────
+const archiver = require('archiver');
+
+app.get('/api/user/export/csv', authenticateToken, async (req, res) => {
+  const email = req.user.email;
+  try {
+    const tables = [
+      {
+        file: 'steps.csv',
+        query: 'SELECT recorded_at, steps, distance_meters, calories, walking_speed FROM step_records WHERE user_id=$1 ORDER BY recorded_at',
+      },
+      {
+        file: 'heart_rate.csv',
+        query: 'SELECT measured_at, bpm, resting FROM heart_rate_records WHERE user_id=$1 ORDER BY measured_at',
+      },
+      {
+        file: 'sleep.csv',
+        query: 'SELECT start_time, end_time, total_sleep_minutes, deep_minutes, light_minutes, rem_minutes, awake_minutes, sleep_quality_score FROM sleep_sessions WHERE user_id=$1 ORDER BY start_time',
+      },
+      {
+        file: 'oxygen_saturation.csv',
+        query: 'SELECT measured_at, spo2_percent FROM oxygen_saturation WHERE user_id=$1 ORDER BY measured_at',
+      },
+      {
+        file: 'activities.csv',
+        query: 'SELECT activity_type, start_time, end_time, duration_minutes, steps, distance_meters, calories, avg_heart_rate, max_heart_rate, intensity_level FROM activities WHERE user_id=$1 ORDER BY start_time',
+      },
+    ];
+
+    function toCSV(rows) {
+      if (rows.length === 0) return '';
+      const cols = Object.keys(rows[0]);
+      const escape = val => {
+        if (val === null || val === undefined) return '';
+        const s = String(val);
+        return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      return [cols.join(','), ...rows.map(r => cols.map(c => escape(r[c])).join(','))].join('\n');
+    }
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename="healthsync-export.zip"');
+
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    archive.pipe(res);
+
+    for (const t of tables) {
+      const result = await pool.query(t.query, [email]);
+      const csv = toCSV(result.rows);
+      if (csv) archive.append(csv, { name: t.file });
+    }
+
+    await archive.finalize();
+  } catch (err) {
+    console.error('CSV export error:', err);
+    if (!res.headersSent) res.status(500).json({ error: 'Export fehlgeschlagen.' });
+  }
+});

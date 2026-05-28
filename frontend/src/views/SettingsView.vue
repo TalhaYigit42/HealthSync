@@ -129,10 +129,18 @@
           </div>
           <div class="action-row" @click="exportData">
             <div>
-              <div class="action-name">Daten exportieren</div>
+              <div class="action-name">Daten exportieren (JSON)</div>
               <div class="action-desc">Alle Gesundheitsdaten als JSON herunterladen</div>
             </div>
             <span v-if="exportLoading" class="action-arrow loading-dot">...</span>
+            <span v-else class="action-arrow">›</span>
+          </div>
+          <div class="action-row" @click="exportCSV">
+            <div>
+              <div class="action-name">Daten exportieren (CSV)</div>
+              <div class="action-desc">Schritte, Schlaf, Herzrate & mehr als ZIP-Archiv</div>
+            </div>
+            <span v-if="csvLoading" class="action-arrow loading-dot">...</span>
             <span v-else class="action-arrow">›</span>
           </div>
           <div class="action-row danger" @click="showDeleteModal = true">
@@ -340,6 +348,33 @@ async function changePassword() {
 
 // Export data
 const exportLoading = ref(false)
+const csvLoading = ref(false)
+
+async function exportCSV() {
+  csvLoading.value = true
+  try {
+    const token = localStorage.getItem('hs_token')
+    const res = await fetch('/api/user/export/csv', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (res.ok) {
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'healthsync-export.zip'
+      a.click()
+      URL.revokeObjectURL(url)
+      showFlash('CSV-Export erfolgreich.', 'success')
+    } else {
+      showFlash('CSV-Export fehlgeschlagen.', 'error')
+    }
+  } catch {
+    showFlash('Netzwerkfehler beim Export.', 'error')
+  }
+  csvLoading.value = false
+}
+
 async function exportData() {
   exportLoading.value = true
   try {
